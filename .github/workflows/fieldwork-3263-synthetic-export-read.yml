@@ -29,49 +29,62 @@ jobs:
         run: |
           python3 - <<'PY'
           import os
+          import textwrap
           from pathlib import Path
 
           path = Path('src/ShellCheck/Analytics.hs')
           source = path.read_text(encoding='utf-8')
-          marker = '''prop_subshellAssignmentCheck25 = verifyNotTree subshellAssignmentCheck "( _=discard; ); echo $_"
-          subshellAssignmentCheck params t =
-          '''
-          properties = '''prop_subshellAssignmentCheck25 = verifyNotTree subshellAssignmentCheck "( _=discard; ); echo $_"
-          prop_subshellAssignmentCheck26 = verifyNotTree subshellAssignmentCheck "@test 'one' { export foo=bar; }\\n@test 'two' { export foo=baz; }\\n"
-          prop_subshellAssignmentCheck27 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { export foo=$foo; }\\n"
-          prop_subshellAssignmentCheck28 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { echo $foo; }\\n"
-          subshellAssignmentCheck params t =
-          '''
+          marker = textwrap.dedent(
+              """
+              prop_subshellAssignmentCheck25 = verifyNotTree subshellAssignmentCheck "( _=discard; ); echo $_"
+              subshellAssignmentCheck params t =
+              """
+          ).lstrip()
+          properties = textwrap.dedent(
+              """
+              prop_subshellAssignmentCheck25 = verifyNotTree subshellAssignmentCheck "( _=discard; ); echo $_"
+              prop_subshellAssignmentCheck26 = verifyNotTree subshellAssignmentCheck "@test 'one' { export foo=bar; }\\n@test 'two' { export foo=baz; }\\n"
+              prop_subshellAssignmentCheck27 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { export foo=$foo; }\\n"
+              prop_subshellAssignmentCheck28 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { echo $foo; }\\n"
+              subshellAssignmentCheck params t =
+              """
+          ).lstrip()
           if source.count(marker) != 1:
               raise SystemExit(f'expected one property insertion point, found {source.count(marker)}')
           source = source.replace(marker, properties, 1)
 
           if os.environ['MODE'] == 'candidate':
-              old = '''findSubshelled (Reference (_, readToken, str):rest) scopes deadVars = do
-              unless (shouldIgnore str) $ case Map.findWithDefault Alive str deadVars of
-                  Alive -> return ()
-                  Dead writeToken reason -> do
-                              info (getId writeToken) 2030 $ "Modification of " ++ str ++ " is local (to subshell caused by "++ reason ++")."
-                              info (getId readToken) 2031 $ str ++ " was modified in a subshell. That change might be lost."
-              findSubshelled rest scopes deadVars
-            where
-              shouldIgnore str =
-                  str `elem` ["@", "*", "_", "IFS"]
-          '''
-              new = '''findSubshelled (Reference (_, readToken, str):rest) scopes deadVars = do
-              unless (shouldIgnore readToken str) $ case Map.findWithDefault Alive str deadVars of
-                  Alive -> return ()
-                  Dead writeToken reason -> do
-                              info (getId writeToken) 2030 $ "Modification of " ++ str ++ " is local (to subshell caused by "++ reason ++")."
-                              info (getId readToken) 2031 $ str ++ " was modified in a subshell. That change might be lost."
-              findSubshelled rest scopes deadVars
-            where
-              shouldIgnore readToken str =
-                  str `elem` ["@", "*", "_", "IFS"] || isSyntheticAssignmentRead readToken str
+              old = textwrap.dedent(
+                  """
+                  findSubshelled (Reference (_, readToken, str):rest) scopes deadVars = do
+                      unless (shouldIgnore str) $ case Map.findWithDefault Alive str deadVars of
+                          Alive -> return ()
+                          Dead writeToken reason -> do
+                                      info (getId writeToken) 2030 $ "Modification of " ++ str ++ " is local (to subshell caused by "++ reason ++")."
+                                      info (getId readToken) 2031 $ str ++ " was modified in a subshell. That change might be lost."
+                      findSubshelled rest scopes deadVars
+                    where
+                      shouldIgnore str =
+                          str `elem` ["@", "*", "_", "IFS"]
+                  """
+              ).lstrip()
+              new = textwrap.dedent(
+                  """
+                  findSubshelled (Reference (_, readToken, str):rest) scopes deadVars = do
+                      unless (shouldIgnore readToken str) $ case Map.findWithDefault Alive str deadVars of
+                          Alive -> return ()
+                          Dead writeToken reason -> do
+                                      info (getId writeToken) 2030 $ "Modification of " ++ str ++ " is local (to subshell caused by "++ reason ++")."
+                                      info (getId readToken) 2031 $ str ++ " was modified in a subshell. That change might be lost."
+                      findSubshelled rest scopes deadVars
+                    where
+                      shouldIgnore readToken str =
+                          str `elem` ["@", "*", "_", "IFS"] || isSyntheticAssignmentRead readToken str
 
-              isSyntheticAssignmentRead (T_Assignment _ _ name _ _) str = name == str
-              isSyntheticAssignmentRead _ _ = False
-          '''
+                      isSyntheticAssignmentRead (T_Assignment _ _ name _ _) str = name == str
+                      isSyntheticAssignmentRead _ _ = False
+                  """
+              ).lstrip()
               if source.count(old) != 1:
                   raise SystemExit(f'expected one analyzer replacement point, found {source.count(old)}')
               source = source.replace(old, new, 1)
