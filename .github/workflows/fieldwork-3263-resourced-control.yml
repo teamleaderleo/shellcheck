@@ -1,0 +1,68 @@
+name: Fieldwork ShellCheck 3263 sourced-function control
+
+on:
+  push:
+    branches:
+      - fieldwork/3263-bats-synthetic-export-read
+    paths:
+      - .github/workflows/fieldwork-3263-resourced-control.yml
+
+permissions:
+  contents: write
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.6.6'
+          cabal-version: 'latest'
+
+      - name: Build and execute sourced-function control from fixture directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          cabal update
+          cabal v2-build exe:shellcheck
+          BIN=$(realpath "$(cabal list-bin exe:shellcheck)")
+          set +e
+          (
+            cd fieldwork/3263/resourced
+            "$BIN" -x -f gcc test.bats
+          ) > fieldwork/3263/results/resourced-rerun.txt 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          if grep -q 'SC1091' fieldwork/3263/results/resourced-rerun.txt; then
+            cat fieldwork/3263/results/resourced-rerun.txt
+            exit 1
+          fi
+          grep -q 'SC2031' fieldwork/3263/results/resourced-rerun.txt
+          printf 'resourced_rerun_exit=%s\n' "$status" \
+            > fieldwork/3263/results/resourced-rerun-status.txt
+          git diff --check
+
+      - name: Update receipt and retire carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >> fieldwork/3263/receipt.md <<EOF
+
+          ## Sourced-function follow-up
+
+          - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - The fixture was rerun from its own directory so \`./lib.sh\` resolved.
+          - SC1091 was absent and SC2031 remained, confirming that the sourced-function case is a separate live control-flow defect not fixed by the synthetic-export change.
+          - Evidence class: target-executed focused control on Linux/GHC 9.6.6.
+          EOF
+          rm .github/workflows/fieldwork-3263-resourced-control.yml
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git add fieldwork/3263 .github/workflows/fieldwork-3263-resourced-control.yml
+          git commit -m "Record sourced-function Bats control [fieldwork executed]"
+          git push origin HEAD:fieldwork/3263-bats-synthetic-export-read
