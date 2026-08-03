@@ -1,0 +1,120 @@
+name: Fieldwork ShellCheck 3263 apply and verify
+
+on:
+  push:
+    branches:
+      - fieldwork/3263-bats-synthetic-export-read
+    paths:
+      - .github/workflows/fieldwork-3263-apply.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.6.6'
+          cabal-version: 'latest'
+
+      - name: Build and capture baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cabal update
+          cabal v2-build exe:shellcheck
+          BIN=$(cabal list-bin exe:shellcheck)
+          mkdir -p fieldwork/3263/results
+          set +e
+          "$BIN" -f gcc fieldwork/3263/original.bats > fieldwork/3263/results/baseline.txt 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -q 'SC2030' fieldwork/3263/results/baseline.txt
+          grep -q 'SC2031' fieldwork/3263/results/baseline.txt
+
+      - name: Apply narrow analyzer change
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/ShellCheck/Analytics.hs')
+          text = path.read_text()
+
+          old_props = '''prop_subshellAssignmentCheck25 = verifyNotTree subshellAssignmentCheck "( _=discard; ); echo $_"\nsubshellAssignmentCheck params t ='''
+          new_props = '''prop_subshellAssignmentCheck25 = verifyNotTree subshellAssignmentCheck "( _=discard; ); echo $_"\nprop_subshellAssignmentCheck26 = verifyNotTree subshellAssignmentCheck "@test 'one' { export foo=bar; }\\n@test 'two' { export foo=baz; }\\n"\nprop_subshellAssignmentCheck27 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { export foo=$foo; }\\n"\nprop_subshellAssignmentCheck28 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { echo $foo; }\\n"\nsubshellAssignmentCheck params t ='''
+          if text.count(old_props) != 1:
+              raise SystemExit('unexpected subshell property block')
+          text = text.replace(old_props, new_props, 1)
+
+          old_call = '    unless (shouldIgnore str) $ case Map.findWithDefault Alive str deadVars of'
+          new_call = '    unless (shouldIgnore readToken str) $ case Map.findWithDefault Alive str deadVars of'
+          if text.count(old_call) != 1:
+              raise SystemExit('unexpected shouldIgnore call')
+          text = text.replace(old_call, new_call, 1)
+
+          old_helper = '''    shouldIgnore str =\n        str `elem` ["@", "*", "_", "IFS"]'''
+          new_helper = '''    shouldIgnore readToken str =\n        str `elem` ["@", "*", "_", "IFS"] || isSyntheticAssignmentRead readToken str\n\n    -- export/declare -x assignments are included in the general variable flow\n    -- as references so they count as externally used. That synthetic reference\n    -- is not a read of the previous value and must not trigger SC2030/SC2031.\n    -- A real RHS read, as in `export foo=$foo`, has a dollar-expansion token and\n    -- is deliberately not ignored here.\n    isSyntheticAssignmentRead (T_Assignment _ _ name _ _) str = name == str\n    isSyntheticAssignmentRead _ _ = False'''
+          if text.count(old_helper) != 1:
+              raise SystemExit('unexpected shouldIgnore helper')
+          text = text.replace(old_helper, new_helper, 1)
+          path.write_text(text)
+          PY
+
+      - name: Run target tests and controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          cabal v2-test test-shellcheck --test-show-details=direct
+          cabal v2-build exe:shellcheck
+          BIN=$(cabal list-bin exe:shellcheck)
+
+          set +e
+          "$BIN" -f gcc fieldwork/3263/original.bats > fieldwork/3263/results/candidate.txt 2>&1
+          candidate_status=$?
+          set -e
+          if grep -Eq 'SC2030|SC2031' fieldwork/3263/results/candidate.txt; then
+            cat fieldwork/3263/results/candidate.txt
+            exit 1
+          fi
+
+          set +e
+          "$BIN" -x -f gcc fieldwork/3263/resourced/test.bats > fieldwork/3263/results/resourced.txt 2>&1
+          resourced_status=$?
+          set -e
+          printf 'candidate_exit=%s\nresourced_exit=%s\n' "$candidate_status" "$resourced_status" \
+            > fieldwork/3263/results/status.txt
+          git diff --check
+
+      - name: Record receipt, retire carrier, and publish tested source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > fieldwork/3263/receipt.md <<EOF
+          # ShellCheck 3263 execution receipt
+
+          - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - Starting head: ${GITHUB_SHA}
+          - Runner: ubuntu-latest with GHC 9.6.6
+          - Baseline: the literal-export Bats fixture emitted SC2030 and SC2031.
+          - Candidate: the literal-export fixture emitted neither diagnostic.
+          - Negative controls: real RHS and cross-test reads are encoded as QuickCheck properties and passed in the full \`test-shellcheck\` suite.
+          - Separate sourced-function fixture: retained in \`results/resourced.txt\`; not claimed fixed.
+          - Gates: full \`cabal v2-test test-shellcheck\`, focused CLI baseline/candidate assertions, and \`git diff --check\`.
+          - Evidence class: target-executed test suite on one Linux/GHC configuration; not cross-version or platform-complete.
+          - Upstream contact: unauthorized and absent.
+          EOF
+          rm .github/workflows/fieldwork-3263-apply.yml
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git add src/ShellCheck/Analytics.hs fieldwork/3263 .github/workflows/fieldwork-3263-apply.yml
+          git commit -m "Avoid synthetic export reads in subshell diagnostics [fieldwork applied]"
+          git push origin HEAD:fieldwork/3263-bats-synthetic-export-read
