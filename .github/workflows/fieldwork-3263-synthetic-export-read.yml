@@ -1,0 +1,104 @@
+name: Fieldwork synthetic export read
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/3263-bats-synthetic-export-read
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyzer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [baseline, candidate]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: latest
+          cabal-version: latest
+      - name: Add discriminating properties
+        env:
+          MODE: ${{ matrix.mode }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('src/ShellCheck/Analytics.hs')
+          source = path.read_text(encoding='utf-8')
+          marker = '''prop_subshellAssignmentCheck25 = verifyNotTree subshellAssignmentCheck "( _=discard; ); echo $_"
+          subshellAssignmentCheck params t =
+          '''
+          properties = '''prop_subshellAssignmentCheck25 = verifyNotTree subshellAssignmentCheck "( _=discard; ); echo $_"
+          prop_subshellAssignmentCheck26 = verifyNotTree subshellAssignmentCheck "@test 'one' { export foo=bar; }\\n@test 'two' { export foo=baz; }\\n"
+          prop_subshellAssignmentCheck27 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { export foo=$foo; }\\n"
+          prop_subshellAssignmentCheck28 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { echo $foo; }\\n"
+          subshellAssignmentCheck params t =
+          '''
+          if source.count(marker) != 1:
+              raise SystemExit(f'expected one property insertion point, found {source.count(marker)}')
+          source = source.replace(marker, properties, 1)
+
+          if os.environ['MODE'] == 'candidate':
+              old = '''findSubshelled (Reference (_, readToken, str):rest) scopes deadVars = do
+              unless (shouldIgnore str) $ case Map.findWithDefault Alive str deadVars of
+                  Alive -> return ()
+                  Dead writeToken reason -> do
+                              info (getId writeToken) 2030 $ "Modification of " ++ str ++ " is local (to subshell caused by "++ reason ++")."
+                              info (getId readToken) 2031 $ str ++ " was modified in a subshell. That change might be lost."
+              findSubshelled rest scopes deadVars
+            where
+              shouldIgnore str =
+                  str `elem` ["@", "*", "_", "IFS"]
+          '''
+              new = '''findSubshelled (Reference (_, readToken, str):rest) scopes deadVars = do
+              unless (shouldIgnore readToken str) $ case Map.findWithDefault Alive str deadVars of
+                  Alive -> return ()
+                  Dead writeToken reason -> do
+                              info (getId writeToken) 2030 $ "Modification of " ++ str ++ " is local (to subshell caused by "++ reason ++")."
+                              info (getId readToken) 2031 $ str ++ " was modified in a subshell. That change might be lost."
+              findSubshelled rest scopes deadVars
+            where
+              shouldIgnore readToken str =
+                  str `elem` ["@", "*", "_", "IFS"] || isSyntheticAssignmentRead readToken str
+
+              isSyntheticAssignmentRead (T_Assignment _ _ name _ _) str = name == str
+              isSyntheticAssignmentRead _ _ = False
+          '''
+              if source.count(old) != 1:
+                  raise SystemExit(f'expected one analyzer replacement point, found {source.count(old)}')
+              source = source.replace(old, new, 1)
+
+          path.write_text(source, encoding='utf-8')
+          PY
+      - name: Update dependency index
+        run: cabal update
+      - name: Run analyzer properties
+        shell: bash
+        env:
+          MODE: ${{ matrix.mode }}
+        run: |
+          set +e
+          cabal test test-shellcheck --allow-newer --test-show-details=direct 2>&1 | tee /tmp/shellcheck-test.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$MODE" = baseline ]; then
+            if [ "$status" -eq 0 ]; then
+              echo 'Expected the synthetic export property to distinguish current behavior'
+              exit 1
+            fi
+            grep -q 'prop_subshellAssignmentCheck26' /tmp/shellcheck-test.log
+          else
+            exit "$status"
+          fi
+      - name: Verify bounded diff
+        run: |
+          git diff --check
+          test "$(git diff --name-only | sort)" = "src/ShellCheck/Analytics.hs"
