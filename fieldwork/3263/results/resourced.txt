@@ -1,0 +1,2 @@
+fieldwork/3263/resourced/test.bats:5:12: note: Not following: ./lib.sh: openBinaryFile: does not exist (No such file or directory) [SC1091]
+fieldwork/3263/resourced/test.bats:10:12: note: Not following: ./lib.sh: openBinaryFile: does not exist (No such file or directory) [SC1091]
