@@ -1,4 +1,4 @@
-name: Verify ShellCheck 3263 base provenance
+name: Verify ShellCheck 3263 command-owned reference
 
 on:
   pull_request:
@@ -28,7 +28,7 @@ jobs:
           cabal-version: latest
           cabal-update: true
 
-      - name: Apply base-provenance candidate
+      - name: Apply command-owned reference candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -43,6 +43,7 @@ jobs:
           subshellAssignmentCheck params t ='''
           new_props = '''prop_subshellAssignmentCheck28 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { echo $foo; }\\n"
           prop_subshellAssignmentCheck29 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { export foo+=baz; }\\n"
+          prop_subshellAssignmentCheck30 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\\n@test 'two' { export foo; }\\n"
           subshellAssignmentCheck params t ='''
           if text.count(old_props) != 1:
               raise SystemExit('unexpected property block')
@@ -67,22 +68,34 @@ jobs:
               isSyntheticAssignmentRead (T_Assignment _ _ name _ _) str = name == str
               isSyntheticAssignmentRead _ _ = False'''
 
-          new_block = '''findSubshelled (Reference (base, readToken, str):rest) scopes deadVars = do
-              unless (shouldIgnore base readToken str) $ case Map.findWithDefault Alive str deadVars of
-                  Alive -> return ()
-                  Dead writeToken reason -> do
-                              info (getId writeToken) 2030 $ "Modification of " ++ str ++ " is local (to subshell caused by "++ reason ++")."
-                              info (getId readToken) 2031 $ str ++ " was modified in a subshell. That change might be lost."
-              findSubshelled rest scopes deadVars
-            where
-              shouldIgnore base readToken str =
-                  str `elem` ["@", "*", "_", "IFS"] || isSyntheticAssignmentRead base readToken str
-
-              isSyntheticAssignmentRead
-                  (T_SimpleCommand _ _ _)
-                  (T_Assignment _ Assign name _ _)
-                  str = name == str
-              isSyntheticAssignmentRead _ _ _ = False'''
+          new_block = '''findSubshelled
+              (Reference (_, readToken@(T_Assignment _ _ readName _ _), str):
++              assignment@(Assignment (base, writeToken, writeName, _)):
++              rest)
++              scopes
++              deadVars
++              | isSyntheticCommandReference base readToken writeToken readName str writeName =
++                  findSubshelled (assignment:rest) scopes deadVars
++            where
++              isSyntheticCommandReference
++                  T_SimpleCommand {}
++                  readToken
++                  writeToken
++                  readName
++                  referencedName
++                  writtenName =
++                      getId readToken == getId writeToken &&
++                      readName == referencedName &&
++                      referencedName == writtenName
++              isSyntheticCommandReference _ _ _ _ _ _ = False
++
++          findSubshelled (Reference (_, readToken, str):rest) scopes deadVars = do
++              unless (str `elem` ["@", "*", "_", "IFS"]) $ case Map.findWithDefault Alive str deadVars of
++                  Alive -> return ()
++                  Dead writeToken reason -> do
++                              info (getId writeToken) 2030 $ "Modification of " ++ str ++ " is local (to subshell caused by "++ reason ++")."
++                              info (getId readToken) 2031 $ str ++ " was modified in a subshell. That change might be lost."
++              findSubshelled rest scopes deadVars'''.replace('\n+', '\n')
 
           if text.count(old_block) != 1:
               raise SystemExit('unexpected analysis block')
@@ -116,11 +129,24 @@ jobs:
           EOF
           set +e
           "$BIN" -f gcc "$tmp/append.bats" > "$tmp/append.txt"
-          status=$?
+          append_status=$?
           set -e
-          test "$status" -ne 0
+          test "$append_status" -ne 0
           grep -q 'SC2030' "$tmp/append.txt"
           grep -q 'SC2031' "$tmp/append.txt"
+
+          cat > "$tmp/bare-export.bats" <<'EOF'
+          #!/usr/bin/env bats
+          @test "one" { foo=bar; }
+          @test "two" { export foo; }
+          EOF
+          set +e
+          "$BIN" -f gcc "$tmp/bare-export.bats" > "$tmp/bare-export.txt"
+          bare_status=$?
+          set -e
+          test "$bare_status" -ne 0
+          grep -q 'SC2030' "$tmp/bare-export.txt"
+          grep -q 'SC2031' "$tmp/bare-export.txt"
 
       - name: Verify source was not published
         shell: bash
