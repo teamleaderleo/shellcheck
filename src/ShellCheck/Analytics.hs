@@ -2071,6 +2071,11 @@ prop_subshellAssignmentCheck22 = verifyNotTree subshellAssignmentCheck "( [[ -n 
 prop_subshellAssignmentCheck23 = verifyNotTree subshellAssignmentCheck "( export foo ); echo $foo"
 prop_subshellAssignmentCheck24 = verifyNotTree subshellAssignmentCheck "( read -r a _ c <<< 'x y z'; ); echo $_"
 prop_subshellAssignmentCheck25 = verifyNotTree subshellAssignmentCheck "( _=discard; ); echo $_"
+prop_subshellAssignmentCheck26 = verifyNotTree subshellAssignmentCheck "@test 'one' { export foo=bar; }\n@test 'two' { export foo=baz; }\n"
+prop_subshellAssignmentCheck27 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\n@test 'two' { export foo=$foo; }\n"
+prop_subshellAssignmentCheck28 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\n@test 'two' { echo $foo; }\n"
+prop_subshellAssignmentCheck29 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\n@test 'two' { export foo+=baz; }\n"
+prop_subshellAssignmentCheck30 = verifyTree subshellAssignmentCheck "@test 'one' { foo=bar; }\n@test 'two' { export foo; }\n"
 subshellAssignmentCheck params t =
     let flow = variableFlow params
         check = findSubshelled flow [("oops",[])] Map.empty
@@ -2083,16 +2088,34 @@ findSubshelled (Assignment x@(_, _, str, data_):rest) scopes@((reason,scope):res
     then findSubshelled rest ((reason, x:scope):restscope) $ Map.insert str Alive deadVars
     else findSubshelled rest scopes deadVars
 
+findSubshelled
+    (Reference (_, readToken@(T_Assignment _ _ readName _ _), str):
+    assignment@(Assignment (base, writeToken, writeName, _)):
+    rest)
+    scopes
+    deadVars
+    | isSyntheticCommandReference base readToken writeToken readName str writeName =
+        findSubshelled (assignment:rest) scopes deadVars
+  where
+    isSyntheticCommandReference
+        T_SimpleCommand {}
+        readToken
+        writeToken
+        readName
+        referencedName
+        writtenName =
+            getId readToken == getId writeToken &&
+            readName == referencedName &&
+            referencedName == writtenName
+    isSyntheticCommandReference _ _ _ _ _ _ = False
+
 findSubshelled (Reference (_, readToken, str):rest) scopes deadVars = do
-    unless (shouldIgnore str) $ case Map.findWithDefault Alive str deadVars of
+    unless (str `elem` ["@", "*", "_", "IFS"]) $ case Map.findWithDefault Alive str deadVars of
         Alive -> return ()
         Dead writeToken reason -> do
                     info (getId writeToken) 2030 $ "Modification of " ++ str ++ " is local (to subshell caused by "++ reason ++")."
                     info (getId readToken) 2031 $ str ++ " was modified in a subshell. That change might be lost."
     findSubshelled rest scopes deadVars
-  where
-    shouldIgnore str =
-        str `elem` ["@", "*", "_", "IFS"]
 
 findSubshelled (StackScope (SubshellScope reason):rest) scopes deadVars =
     findSubshelled rest ((reason,[]):scopes) deadVars
