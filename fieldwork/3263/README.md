@@ -1,48 +1,66 @@
 # Fieldwork: synthetic export reads across Bats tests
 
-Upstream issue: https://github.com/koalaman/shellcheck/issues/3263  
+Upstream issue: https://redirect.github.com/koalaman/shellcheck/issues/3263  
 Inspected source: `9af7ee28ce587baadd950b85dd6826a16b9c068d`  
+Current canonical investigation head before this documentation update: `a1716be3b847dc23761d35137b43cef7752b3c1d`  
 External contact: **not authorized and not performed**
 
 ## In simple words
 
-Each Bats `@test` block is correctly treated as an isolated subshell. The false warning in the original report came from a narrower ordering bug: `export foo=value` was represented as both a reference and an assignment, and the synthetic reference was processed first. At the start of the second test, that artificial read saw the first test's dead `foo` before the replacement assignment made the new value alive.
+Each Bats `@test` block is correctly treated as an isolated subshell. The false warning in the original report comes from a narrower ordering bug: replacement forms such as `export foo=value` contribute a command-level reference immediately before their assignment. At the start of a later test, that artificial read can observe the earlier test's dead value before the replacement assignment makes the new value alive.
 
-The fork now fixes that original case without erasing real cross-test reads.
+The first fork implementation ignored every same-name assignment-token reference. That fixed the literal replacement case, but self-review found that it also erased the genuine read from append assignments such as `export foo+=value`. The source currently retained on this branch is therefore **not ready**.
 
-## Implemented correction
+## Tested replacement candidate
 
-In `subshellAssignmentCheck`, ignore a `Reference` whose reference token is the same variable's `T_Assignment`. This suppresses only the artificial “exported variable is used externally” reference. A real RHS reference such as `export foo=$foo` has its own dollar-expansion token and remains eligible for SC2030/SC2031.
+The command-owned adjacency candidate skips a reference only when:
 
-The implementation does not reset all variable state between Bats tests. Existing behavior intentionally warns when one test assigns a value and a later test genuinely reads it.
+1. the reference token is a shell assignment token;
+2. the immediately following flow event is the matching assignment;
+3. that assignment belongs to an `export` or `declare` simple command.
+
+This matches the observed flow distinctions:
+
+- replacement export: skip the artificial reference;
+- append export: retain the earlier genuine append read and skip only the later artificial reference;
+- arithmetic update: retain the read because the assignment is not command-owned;
+- bare `export foo`: retain the read because its token is not an assignment;
+- explicit RHS read: retain the separate expansion reference.
 
 ## Executed evidence
 
-Workflow run `30836287359`, job `91762153657`, completed successfully on Ubuntu with GHC 9.6.6.
+Initial workflow run `30836287359`, job `91762153657`, proved the original literal case and complete suite on Ubuntu/GHC 9.6.6, but did not include the later append discriminator.
 
-- full `cabal v2-test test-shellcheck` passed;
-- the base literal-export fixture emitted SC2030 and SC2031;
-- the candidate emitted neither diagnostic;
-- `export foo=$foo` and `echo $foo` negative controls remained warning cases through the property suite;
-- `git diff --check` passed.
+Read-only workflow run `30959236798`, job `92159247440`, tested the replacement candidate against immutable source `a1716be3b847dc23761d35137b43cef7752b3c1d`:
 
-Raw outputs and the receipt are retained under `fieldwork/3263/results/` and `fieldwork/3263/receipt.md`.
+- full `cabal v2-test test-shellcheck --test-show-details=direct` passed;
+- `exe:shellcheck` built successfully;
+- literal replacement export emitted no SC2030/SC2031;
+- append export retained SC2030 and SC2031;
+- bare export retained SC2030 and SC2031;
+- the source diff was limited to `src/ShellCheck/Analytics.hs` and `git diff --check` passed.
 
-Evidence class: `target-executed` on one Linux/GHC configuration; not cross-platform or cross-version complete.
+Evidence class: `target-executed-read-only` on Ubuntu 24.04 with GHC 9.6.6; not cross-platform or cross-version complete.
 
-## Separate follow-up
+## Publication boundary
 
-The later issue comment involving a file sourced inside a Bats test is not the same mechanism. Included function bodies are linearly visited at the source site, so an assignment inside a sourced function can be marked dead when that test scope ends even though the function executes later. That needs a function/include control-flow model, not the narrow export fix.
+Several execution-only carriers attempted to materialize the green candidate onto this canonical branch. GitHub emitted no observable materialization run or source update. Those carriers were retired, both temporary workflows were deleted from `master`, the normal build workflow was restored byte-for-byte, and the execution branches were reset to the cleaned master head.
 
-The first retained attempt to characterize this follow-up was a harness failure: it ran from the repository root and stopped at SC1091 because `./lib.sh` did not resolve. A corrected control is executed from the fixture directory through Fieldwork Round 005 and must be evaluated separately.
+Do not describe the green candidate as implemented on this branch. The canonical production file still contains the earlier broad assignment-token filter with the known append-read defect.
+
+## Separate sourced-function follow-up
+
+The issue comment involving a file sourced inside a Bats test is a separate mechanism. The corrected fixture was executed from its own directory and retained SC2031 without SC1091. Included function bodies are linearly visited at the source site, while their later call behavior is represented separately; a repair likely needs function/include control-flow modeling rather than the narrow export discriminator. That investigation remains in separate draft PR #3 with no production fix selected.
 
 ## Artifacts
 
-- `candidate.patch` records the original implementation sketch;
-- `original.bats` and `resourced/` retain the two discriminating reports;
-- `receipt.md` and `results/` retain executed primary-fix evidence.
+- `candidate.patch` records the currently retained, superseded implementation and must not be treated as final;
+- `original.bats` and `resourced/` retain discriminating reports;
+- `receipt.md` and `results/` retain executed evidence;
+- immutable carrier commit `b6dbe06d033f67b472450b59cacd9175f8b6ef31` retains the exact green transformer and controls.
 
 ## Disposition
 
-**Primary original-case fix: implemented and target-executed.**  
-**Sourced-function case: separate investigation; not claimed fixed.**
+**Primary candidate: full focused gate passed read-only; canonical source not materialized.**  
+**Current retained source: known append-read defect; hold.**  
+**Sourced-function case: separate reproduction-only investigation; not fixed.**
