@@ -1,7 +1,7 @@
 name: Materialize tested ShellCheck 3263 repair
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - master
     paths:
@@ -12,7 +12,9 @@ permissions:
 
 jobs:
   materialize:
-    if: github.head_ref == 'execution/3263-materialize-tested-repair'
+    if: >-
+      github.event.pull_request.head.repo.full_name == 'teamleaderleo/shellcheck' &&
+      github.event.pull_request.head.ref == 'execution/3263-materialize-tested-repair'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
