@@ -1,2 +1,0 @@
-candidate_exit=0
-resourced_exit=1
