@@ -6,9 +6,21 @@ External contact: **not authorized and not performed**
 
 ## In simple words
 
-A library file defines a function that assigns an array. Bats `setup()` sources the library before each test, one test redundantly sources it again, and a later test calls the function. ShellCheck can attribute the function-body assignment to the earlier test's subshell even though sourcing a function definition does not execute its body.
+A library file defines a function that assigns an array. Bats `setup()` sources the library before each test, one test redundantly sources it again, and a later test calls the function. ShellCheck attributes the function-body assignment to an earlier test's subshell even though sourcing a function definition does not execute its body.
 
-This is separate from the literal-`export` ordering bug fixed on `fieldwork/3263-bats-synthetic-export-read`.
+This is separate from the literal-`export` ordering bug fixed on clean source PR #11.
+
+## Executed control
+
+Fieldwork workflow run `30839352175`, job `91772318148`, executed the fixture from this directory on Ubuntu with GHC 9.6.6:
+
+- `./lib.sh` resolved;
+- ShellCheck exited 1;
+- SC1091 was absent;
+- SC2031 remained at the later `COMPREPLY` read;
+- the branch fixture blobs match the executed fixture blobs.
+
+This establishes a focused live control-flow false positive. It does not select a production fix.
 
 ## Source model
 
@@ -19,13 +31,15 @@ This is separate from the literal-`export` ordering bug fixed on `fieldwork/3263
 - `subshellAssignmentCheck` marks those writes dead when the earlier Bats scope ends;
 - later function invocation is not represented as re-execution of the function body's writes in that linear model.
 
-ShellCheck's CFG already has a more appropriate distinction through `CFDefineFunction` and separate function execution graphs. The likely owning boundary is therefore function/include execution modeling or a CFG-backed replacement for SC2030/SC2031—not another token-specific exception.
+ShellCheck's CFG already distinguishes function definition from execution through `CFDefineFunction` and separate function execution graphs. The likely owning boundary is therefore function/include execution modeling or a CFG-backed replacement for SC2030/SC2031—not another token-specific exception.
 
 ## Competing hypotheses
 
 1. definition-time traversal treats the function body as executed when the file is sourced;
 2. repeated include token identity leaks state between source sites;
 3. Bats `setup()` lifecycle is under-modeled, so its per-test execution is flattened into one source-order stream.
+
+The executed fixture proves the false positive survives after include resolution. It does not yet distinguish all three mechanisms.
 
 ## Required controls
 
@@ -49,6 +63,6 @@ Simply skipping all function bodies is unsafe because it would remove legitimate
 
 ## Current state
 
-The first retained run from the primary branch was a harness failure: it ran from the repository root and stopped at SC1091 because `./lib.sh` did not resolve. The corrected control must execute from this fixture directory and establish whether SC2031 remains after the include resolves.
+Evidence class: `target-executed-focused`, `source-reviewed`, `production-fix-not-selected`.
 
-Evidence state: `source-reviewed`; target control queued through Fieldwork Round 005; no production fix selected.
+Next work is a discriminator matrix that separates definition-time traversal, repeated-include identity, and Bats `setup()` flattening. No production source change is justified until that matrix identifies the owning semantic boundary.
