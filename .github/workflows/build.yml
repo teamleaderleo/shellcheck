@@ -1,12 +1,21 @@
 name: Build ShellCheck
 
-# Run this workflow every time a new commit pushed to your repository
-on: [push, pull_request]
+# Run this workflow for repository updates and the exact internal materialization command.
+on:
+  push:
+  pull_request:
+  issue_comment:
+    types: [created]
 
 jobs:
   materialize_3263:
     name: Materialize tested ShellCheck 3263 repair
-    if: github.event_name == 'pull_request' && github.head_ref == 'execution/3263-materialize-registered-carrier'
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.issue.number == 9 &&
+      github.event.comment.user.login == 'teamleaderleo' &&
+      github.event.comment.body == '/materialize-shellcheck-3263'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
@@ -105,6 +114,7 @@ jobs:
 
   package_source:
     name: Package Source Code
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Install Dependencies
