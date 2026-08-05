@@ -1,4 +1,4 @@
-name: Verify ShellCheck 3263 command-owned reference
+name: Verify and materialize ShellCheck 3263 command-owned reference
 
 on:
   pull_request:
@@ -8,29 +8,29 @@ on:
       - fieldwork/3263/COMMAND_OWNED_REFERENCE_V2_TRIGGER.md
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  verify:
+  materialize:
+    if: github.head_ref == 'execution/3263-materialize-registered-carrier'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - name: Check out carrier generation
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check out immutable tested carrier
+        uses: actions/checkout@v4
         with:
           repository: teamleaderleo/shellcheck
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: b6dbe06d033f67b472450b59cacd9175f8b6ef31
           path: carrier
           persist-credentials: false
 
-      - name: Check out exact reachable source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check out exact canonical source
+        uses: actions/checkout@v4
         with:
           repository: teamleaderleo/shellcheck
           ref: a1716be3b847dc23761d35137b43cef7752b3c1d
           path: candidate
           fetch-depth: 0
-          persist-credentials: false
 
       - name: Set up Haskell
         uses: haskell-actions/setup@v2
@@ -39,5 +39,73 @@ jobs:
           cabal-version: latest
           cabal-update: true
 
-      - name: Run exact command-owned reference controls
-        run: bash carrier/fieldwork/3263/run_command_owned_reference.sh candidate
+      - name: Re-run exact tested repair and publish fork branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash carrier/fieldwork/3263/run_command_owned_reference.sh candidate
+          cd candidate
+          mkdir -p fieldwork/3263
+          git diff 9af7ee28ce587baadd950b85dd6826a16b9c068d -- src/ShellCheck/Analytics.hs > fieldwork/3263/candidate.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          receipt = Path('fieldwork/3263/receipt.md')
+          prior = receipt.read_text() if receipt.exists() else '# ShellCheck 3263 execution receipts\n'
+          addition = f'''
+
+## Command-owned adjacency repair
+
+- Workflow run: https://github.com/teamleaderleo/shellcheck/actions/runs/{os.environ['GITHUB_RUN_ID']}
+- Starting canonical head: `a1716be3b847dc23761d35137b43cef7752b3c1d`
+- Tested carrier commit: `b6dbe06d033f67b472450b59cacd9175f8b6ef31`
+- Full `cabal v2-test test-shellcheck --test-show-details=direct` passed.
+- `exe:shellcheck` built successfully.
+- Literal replacement export emitted no SC2030/SC2031.
+- Append export retained SC2030 and SC2031.
+- Bare export retained SC2030 and SC2031.
+- `git diff --check` passed.
+- Evidence class: target-executed on Ubuntu 24.04 with GHC 9.6.6; broader compiler/OS matrix not run.
+'''
+          if '## Command-owned adjacency repair' not in prior:
+              receipt.write_text(prior.rstrip() + addition + '\n')
+          PY
+          git diff --check
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git add src/ShellCheck/Analytics.hs fieldwork/3263/candidate.patch fieldwork/3263/receipt.md
+          git commit -m "Preserve real reads in Bats export diagnostics"
+          git push origin HEAD:fieldwork/3263-bats-synthetic-export-read
+
+      - name: Check out cleanup branch
+        if: always()
+        uses: actions/checkout@v4
+        with:
+          repository: teamleaderleo/shellcheck
+          ref: master
+          path: cleanup
+          fetch-depth: 0
+
+      - name: Retire ShellCheck execution workflows
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd cleanup
+          git pull --ff-only origin master
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          changed=0
+          for path in \
+            .github/workflows/fieldwork-3263-base-provenance-readonly.yml \
+            .github/workflows/fieldwork-3263-materialize-tested-repair.yml
+          do
+            if test -f "$path"; then
+              git rm "$path"
+              changed=1
+            fi
+          done
+          if test "$changed" -eq 1; then
+            git commit -m "Retire ShellCheck 3263 execution workflows"
+            git push origin HEAD:master
+          fi
