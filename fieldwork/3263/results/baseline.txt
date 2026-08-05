@@ -1,2 +1,0 @@
-fieldwork/3263/original.bats:4:12: note: Modification of foo is local (to subshell caused by @bats test). [SC2030]
-fieldwork/3263/original.bats:8:12: note: foo was modified in a subshell. That change might be lost. [SC2031]
