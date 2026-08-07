@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Verify carrier fence
@@ -34,9 +34,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
-          test "$(git rev-parse HEAD^)" = "$SOURCE_BASE"
-          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/fieldwork-3263-direct-source-gate.yml
-          git diff --check HEAD^ HEAD
+          test "$(git merge-base HEAD "$SOURCE_BASE")" = "$SOURCE_BASE"
+          test "$(git diff --name-only "$SOURCE_BASE" HEAD)" = .github/workflows/fieldwork-3263-direct-source-gate.yml
+          git diff --check "$SOURCE_BASE" HEAD
 
       - name: Check out exact source head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
