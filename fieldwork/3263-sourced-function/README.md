@@ -41,15 +41,18 @@ ShellCheck's CFG already distinguishes function definition from execution throug
 
 The executed fixture proves the false positive survives after include resolution. It does not yet distinguish all three mechanisms.
 
-## Required controls
+## Static discriminator controls
 
-- `setup()` sources the library and a later test calls the function: no false warning;
-- a first test redundantly sources the library and a later test calls the function: reproduce SC2031 without SC1091;
-- a sourced file with a top-level assignment: preserve real subshell-local behavior;
-- a function defined and called in one test: no lost-change warning for reads in that test;
-- the library sourced independently for each test: no state inherited from an earlier test;
-- a function defined only in the first test and called in the second: do not hide the unavailable-definition problem;
-- nested and same-content/different-path includes: distinguish execution semantics from token identity.
+The prepared ShellCheck matrix now contains six static controls:
+
+- `setup-only.bats`: setup sources the library, later test calls the function, with no redundant first-test source;
+- `independent-sources.bats`: each test sources independently;
+- `same-test.bats`: source, call, and read remain in one test;
+- `different-paths.bats`: identical library content arrives through two include paths;
+- `top-level-assignment.bats`: a real sourced top-level write must keep cross-test SC2030/SC2031 behavior;
+- `function-body-warning.bats`: an ordinary function body contains a deliberate SC2086 control, proving that a repair must not broadly stop analysing function bodies.
+
+The previous `definition-isolation.bats` idea was overclaimed as a ShellCheck discriminator. ShellCheck cannot reliably call a bare command undefined because it may be an external executable. That fixture is retained only as a Bats runtime semantic control: a function defined in one isolated test is not available in another. If Bats is executed, that result must be recorded separately from ShellCheck diagnostics.
 
 ## Candidate architectures
 
@@ -59,10 +62,10 @@ Compare:
 2. explicit legacy flow events for function definition versus modeled invocation;
 3. a bounded definition-time exclusion only if call-site modeling preserves existing function diagnostics.
 
-Simply skipping all function bodies is unsafe because it would remove legitimate warnings when functions are invoked.
+Simply skipping all function bodies is unsafe. The new SC2086 fixture makes that rejection executable rather than merely conceptual.
 
 ## Current state
 
 Evidence class: `target-executed-focused`, `source-reviewed`, `production-fix-not-selected`.
 
-Next work is a discriminator matrix that separates definition-time traversal, repeated-include identity, and Bats `setup()` flattening. No production source change is justified until that matrix identifies the owning semantic boundary.
+The six-file static discriminator matrix is prepared but unexecuted. `definition-isolation.bats` is runtime-only supplemental context. No production source change is justified until the static matrix identifies the owning semantic boundary and any proposed repair preserves the function-body warning and top-level assignment controls.
