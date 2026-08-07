@@ -77,7 +77,8 @@ jobs:
           cabal sdist 2>&1 | tee ../shellcheck-sdist.log
           test -s dist-newstyle/sdist/shellcheck-*.tar.gz
           git checkout -- src/ShellCheck/Data.hs
-          test -z "$(git status --porcelain)"
+          git diff --quiet
+          git diff --cached --quiet
 
       - name: Run complete analyzer suite
         shell: bash
@@ -124,7 +125,8 @@ jobs:
           grep -q 'SC2030' ../bare-export-control.txt
           grep -q 'SC2031' ../bare-export-control.txt
 
-          test -z "$(git status --porcelain)"
+          git diff --quiet
+          git diff --cached --quiet
 
       - name: Upload direct-source receipt
         if: always()
