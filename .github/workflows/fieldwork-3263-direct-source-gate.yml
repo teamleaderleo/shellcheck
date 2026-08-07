@@ -1,0 +1,143 @@
+name: Validate direct synthetic export repair
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/fieldwork-3263-direct-source-gate.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shellcheck-3263-direct-source-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_BASE: 9af7ee28ce587baadd950b85dd6826a16b9c068d
+  SOURCE_HEAD: 83316fa272e4fc1caeffdfe39f946819bc723353
+  SOURCE_BLOB: 0b7ffd18e27d03478d6d2bc9095972d145f28cac
+
+jobs:
+  exact-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out execution carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify carrier fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test "$(git merge-base HEAD "$SOURCE_BASE")" = "$SOURCE_BASE"
+          test "$(git diff --name-only "$SOURCE_BASE" HEAD)" = .github/workflows/fieldwork-3263-direct-source-gate.yml
+          git diff --check "$SOURCE_BASE" HEAD
+
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: teamleaderleo/shellcheck
+          ref: ${{ env.SOURCE_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+
+      - name: Verify exact source identity
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          test "$(git rev-parse HEAD^)" = "$SOURCE_BASE"
+          test "$(git diff --name-only "$SOURCE_BASE" "$SOURCE_HEAD")" = src/ShellCheck/Analytics.hs
+          test "$(git hash-object src/ShellCheck/Analytics.hs)" = "$SOURCE_BLOB"
+          test "$(git diff --numstat "$SOURCE_BASE" "$SOURCE_HEAD")" = $'27\t4\tsrc/ShellCheck/Analytics.hs'
+          git diff --check "$SOURCE_BASE" "$SOURCE_HEAD"
+
+      - name: Set up Haskell
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: 9.6.6
+          cabal-version: latest
+          cabal-update: true
+
+      - name: Import public tags and package source
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          git fetch --force https://github.com/koalaman/shellcheck 'refs/tags/*:refs/tags/*'
+          git describe --tags --always | tee ../shellcheck-source-description.txt
+          ./setgitversion
+          cabal sdist 2>&1 | tee ../shellcheck-sdist.log
+          test -s dist-newstyle/sdist/shellcheck-*.tar.gz
+          git checkout -- src/ShellCheck/Data.hs
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Run complete analyzer suite
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          cabal v2-test test-shellcheck --test-show-details=direct \
+            2>&1 | tee ../shellcheck-test.log
+
+      - name: Build executable and run focused controls
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          cabal v2-build exe:shellcheck
+          bin="$(cabal list-bin exe:shellcheck)"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+
+          cat > "$tmp/literal.bats" <<'EOF'
+          #!/usr/bin/env bats
+          @test "one" { export foo=bar; }
+          @test "two" { export foo=baz; }
+          EOF
+          "$bin" -f gcc "$tmp/literal.bats" > ../literal-control.txt || true
+          ! grep -Eq 'SC2030|SC2031' ../literal-control.txt
+
+          cat > "$tmp/append.bats" <<'EOF'
+          #!/usr/bin/env bats
+          @test "one" { foo=bar; }
+          @test "two" { export foo+=baz; }
+          EOF
+          "$bin" -f gcc "$tmp/append.bats" > ../append-control.txt || true
+          grep -q 'SC2030' ../append-control.txt
+          grep -q 'SC2031' ../append-control.txt
+
+          cat > "$tmp/bare-export.bats" <<'EOF'
+          #!/usr/bin/env bats
+          @test "one" { foo=bar; }
+          @test "two" { export foo; }
+          EOF
+          "$bin" -f gcc "$tmp/bare-export.bats" > ../bare-export-control.txt || true
+          grep -q 'SC2030' ../bare-export-control.txt
+          grep -q 'SC2031' ../bare-export-control.txt
+
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Upload direct-source receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: shellcheck-3263-direct-source-${{ env.SOURCE_HEAD }}
+          if-no-files-found: error
+          path: |
+            shellcheck-source-description.txt
+            shellcheck-sdist.log
+            shellcheck-test.log
+            literal-control.txt
+            append-control.txt
+            bare-export-control.txt
